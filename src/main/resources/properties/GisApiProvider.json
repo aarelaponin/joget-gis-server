@@ -1,0 +1,13 @@
+[
+  {
+    "title": "Configure GIS API",
+    "properties": [
+      {
+        "name": "info",
+        "label": "About",
+        "type": "label",
+        "value": "GIS Geometry API provides REST endpoints for polygon geometry operations including calculate, validate, simplify, and overlap checking."
+      }
+    ]
+  }
+]

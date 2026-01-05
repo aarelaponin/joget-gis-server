@@ -1,0 +1,170 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/maven-v4_0_0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <groupId>global.govstack</groupId>
+    <artifactId>joget-gis-server</artifactId>
+    <packaging>bundle</packaging>
+    <version>8.1-SNAPSHOT</version>
+    <name>Joget GIS Server Plugin</name>
+    <description>Backend REST API for GIS geometry operations - Calculate, Validate, Simplify, Overlap Check</description>
+    <url>https://www.govstack.global</url>
+
+    <properties>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <maven.compiler.source>17</maven.compiler.source>
+        <maven.compiler.target>17</maven.compiler.target>
+        <jts.version>1.19.0</jts.version>
+    </properties>
+
+    <repositories>
+        <repository>
+            <id>joget-internal</id>
+            <url>https://developer.joget.org/archiva/repository/internal</url>
+        </repository>
+        <repository>
+            <id>joget-snapshots</id>
+            <url>https://developer.joget.org/archiva/repository/snapshots</url>
+            <snapshots>
+                <enabled>true</enabled>
+            </snapshots>
+        </repository>
+        <repository>
+            <id>osgeo</id>
+            <name>OSGeo Release Repository</name>
+            <url>https://repo.osgeo.org/repository/release/</url>
+        </repository>
+    </repositories>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.13.0</version>
+                <configuration>
+                    <release>17</release>
+                </configuration>
+            </plugin>
+
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>3.2.5</version>
+                <configuration>
+                    <skipTests>false</skipTests>
+                </configuration>
+            </plugin>
+
+            <plugin>
+                <groupId>org.apache.felix</groupId>
+                <artifactId>maven-bundle-plugin</artifactId>
+                <version>5.1.9</version>
+                <extensions>true</extensions>
+                <configuration>
+                    <instructions>
+                        <Export-Package></Export-Package>
+                        <Private-Package>{local-packages}</Private-Package>
+                        <Bundle-Activator>global.govstack.gisserver.Activator</Bundle-Activator>
+                        <Include-Resource>
+                            {maven-resources},
+                            properties=src/main/resources/properties
+                        </Include-Resource>
+                        <Import-Package>
+                            org.joget.api.annotations,
+                            org.joget.api.model,
+                            org.joget.api.service,
+                            org.joget.commons.util,
+                            org.joget.plugin.base,
+                            org.joget.plugin.property.model,
+                            org.joget.plugin.property.service,
+                            org.joget.directory.model,
+                            org.joget.directory.model.service,
+                            org.joget.workflow.model,
+                            org.joget.workflow.model.service,
+                            org.joget.apps.app.model,
+                            org.joget.apps.app.service,
+                            org.joget.apps.form.dao,
+                            org.joget.apps.form.model,
+                            org.joget.apps.form.service,
+                            org.osgi.framework;version="1.3.0",
+                            *;resolution:=optional
+                        </Import-Package>
+                        <!-- Embed JTS and json-simple into the bundle -->
+                        <Embed-Dependency>jts-core,jts-io-common,json-simple;inline=true</Embed-Dependency>
+                        <DynamicImport-Package>*</DynamicImport-Package>
+                    </instructions>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+
+    <dependencies>
+        <!-- JTS Topology Suite - Geometry operations -->
+        <dependency>
+            <groupId>org.locationtech.jts</groupId>
+            <artifactId>jts-core</artifactId>
+            <version>${jts.version}</version>
+        </dependency>
+
+        <!-- JTS IO for GeoJSON reader/writer -->
+        <dependency>
+            <groupId>org.locationtech.jts.io</groupId>
+            <artifactId>jts-io-common</artifactId>
+            <version>${jts.version}</version>
+        </dependency>
+
+        <!-- JSON Simple - required by JTS GeoJsonReader -->
+        <dependency>
+            <groupId>com.googlecode.json-simple</groupId>
+            <artifactId>json-simple</artifactId>
+            <version>1.1.1</version>
+        </dependency>
+
+        <!-- Testing dependencies -->
+        <dependency>
+            <groupId>junit</groupId>
+            <artifactId>junit</artifactId>
+            <version>4.13.2</version>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- Joget dependencies (provided scope) -->
+        <dependency>
+            <groupId>org.joget</groupId>
+            <artifactId>wflow-core</artifactId>
+            <version>8.1-SNAPSHOT</version>
+            <exclusions>
+                <exclusion>
+                    <groupId>javax.servlet</groupId>
+                    <artifactId>javax.servlet-api</artifactId>
+                </exclusion>
+            </exclusions>
+            <scope>provided</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.joget.api</groupId>
+            <artifactId>apibuilder_api</artifactId>
+            <version>8.1-SNAPSHOT</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- Servlet API (provided by Joget) -->
+        <dependency>
+            <groupId>javax.servlet</groupId>
+            <artifactId>javax.servlet-api</artifactId>
+            <version>3.1.0</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- JSON - provided by wflow-core, just need for compilation -->
+        <dependency>
+            <groupId>org.json</groupId>
+            <artifactId>json</artifactId>
+            <version>20230227</version>
+            <scope>provided</scope>
+        </dependency>
+    </dependencies>
+</project>
