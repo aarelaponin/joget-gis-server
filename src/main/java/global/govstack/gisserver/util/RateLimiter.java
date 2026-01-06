@@ -16,19 +16,21 @@ import java.util.concurrent.atomic.AtomicLong;
  * - geocode: 30 requests/minute
  * - reverseGeocode: 30 requests/minute
  * - batchCalculate: 20 requests/minute
+ * - nearbyParcels: 60 requests/minute
  * - health: unlimited
  */
 public class RateLimiter {
 
     // Rate limits per endpoint (requests per minute)
-    private static final Map<String, Integer> RATE_LIMITS = Map.of(
-        "calculate", 100,
-        "validate", 100,
-        "simplify", 50,
-        "checkOverlap", 20,
-        "geocode", 30,
-        "reverseGeocode", 30,
-        "batchCalculate", 20
+    private static final Map<String, Integer> RATE_LIMITS = Map.ofEntries(
+        Map.entry("calculate", 100),
+        Map.entry("validate", 100),
+        Map.entry("simplify", 50),
+        Map.entry("checkOverlap", 20),
+        Map.entry("geocode", 30),
+        Map.entry("reverseGeocode", 30),
+        Map.entry("batchCalculate", 20),
+        Map.entry("nearbyParcels", 60)
     );
 
     // Window size in milliseconds (1 minute)

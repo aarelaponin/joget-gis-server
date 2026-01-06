@@ -9,7 +9,10 @@ import global.govstack.gisserver.model.ValidationResult;
 import global.govstack.gisserver.service.GeocodingService;
 import global.govstack.gisserver.service.GeocodingService.GeocodingResult;
 import global.govstack.gisserver.service.GeocodingService.ReverseGeocodingResult;
+import global.govstack.gisserver.service.NearbyParcelsService;
 import global.govstack.gisserver.service.OverlapService;
+import global.govstack.gisserver.model.NearbyParcel;
+import global.govstack.gisserver.model.NearbyParcelsResult;
 import global.govstack.gisserver.util.InputValidator;
 import global.govstack.gisserver.util.RateLimiter;
 import org.joget.api.annotations.Operation;
@@ -38,11 +41,12 @@ import java.util.UUID;
  * GIS API Provider - REST API for geometry operations.
  *
  * Endpoints:
- * - POST /gis/calculate   - Calculate area, perimeter, centroid
- * - POST /gis/validate    - Validate geometry against rules
- * - POST /gis/simplify    - Simplify geometry (reduce vertices)
- * - POST /gis/checkOverlap - Check for overlapping parcels
- * - GET  /gis/health      - Health check endpoint
+ * - POST /gis/calculate     - Calculate area, perimeter, centroid
+ * - POST /gis/validate      - Validate geometry against rules
+ * - POST /gis/simplify      - Simplify geometry (reduce vertices)
+ * - POST /gis/checkOverlap  - Check for overlapping parcels
+ * - GET  /gis/nearbyParcels - Get nearby parcels for display
+ * - GET  /gis/health        - Health check endpoint
  *
  * Base URL: /jw/api/gis/gis/...
  */
@@ -54,6 +58,7 @@ public class GisApiProvider extends ApiPluginAbstract implements PropertyEditabl
     private GeometryEngine geometryEngine;
     private OverlapService overlapService;
     private GeocodingService geocodingService;
+    private NearbyParcelsService nearbyParcelsService;
 
     @Override
     public String getName() {
@@ -129,6 +134,16 @@ public class GisApiProvider extends ApiPluginAbstract implements PropertyEditabl
             geocodingService = new GeocodingService();
         }
         return geocodingService;
+    }
+
+    /**
+     * Get nearby parcels service (lazy initialization).
+     */
+    private NearbyParcelsService getNearbyParcelsService() {
+        if (nearbyParcelsService == null) {
+            nearbyParcelsService = new NearbyParcelsService();
+        }
+        return nearbyParcelsService;
     }
 
     // ==========================================================================
@@ -1062,6 +1077,197 @@ public class GisApiProvider extends ApiPluginAbstract implements PropertyEditabl
     }
 
     // ==========================================================================
+    // NEARBY PARCELS ENDPOINT
+    // ==========================================================================
+
+    /**
+     * Get nearby parcels for read-only display.
+     *
+     * Endpoint: GET /jw/api/gis/gis/nearbyParcels
+     *
+     * Returns parcels within a bounding box for visual context when
+     * adding/editing a new parcel. Results are READ-ONLY.
+     */
+    @Operation(
+        path = "/gis/nearbyParcels",
+        type = Operation.MethodType.GET,
+        summary = "Get nearby parcels for display",
+        description = "Retrieves parcels within a bounding box for read-only display context."
+    )
+    @Responses({
+        @Response(responseCode = 200, description = "Parcels retrieved successfully"),
+        @Response(responseCode = 400, description = "Invalid parameters"),
+        @Response(responseCode = 429, description = "Rate limit exceeded"),
+        @Response(responseCode = 500, description = "Server error")
+    })
+    public ApiResponse getNearbyParcels(
+        @Param(value = "formId", required = true) String formId,
+        @Param(value = "geometryFieldId", required = true) String geometryFieldId,
+        @Param(value = "bounds", required = true) String bounds,
+        @Param(value = "excludeRecordId", required = false) String excludeRecordId,
+        @Param(value = "filterCondition", required = false) String filterCondition,
+        @Param(value = "returnFields", required = false) String returnFields,
+        @Param(value = "maxResults", required = false) Integer maxResults
+    ) {
+        String requestId = UUID.randomUUID().toString();
+        long startTime = System.currentTimeMillis();
+
+        LogUtil.info(CLASS_NAME, "=== GIS NearbyParcels Request [" + requestId + "] ===");
+
+        // Check rate limit
+        ApiResponse rateLimitError = checkRateLimit("nearbyParcels", requestId, startTime);
+        if (rateLimitError != null) {
+            return rateLimitError;
+        }
+
+        try {
+            // Validate required parameters
+            if (formId == null || formId.isEmpty()) {
+                return errorResponse(400, "MISSING_FORM_ID",
+                    "Form ID is required", requestId, startTime);
+            }
+
+            if (geometryFieldId == null || geometryFieldId.isEmpty()) {
+                return errorResponse(400, "MISSING_GEOMETRY_FIELD",
+                    "Geometry field ID is required", requestId, startTime);
+            }
+
+            if (bounds == null || bounds.isEmpty()) {
+                return errorResponse(400, "INVALID_BOUNDS",
+                    "Bounds parameter is required", requestId, startTime);
+            }
+
+            // Parse bounds: minLng,minLat,maxLng,maxLat
+            String[] boundsParts = bounds.split(",");
+            if (boundsParts.length != 4) {
+                JSONObject details = new JSONObject();
+                details.put("format", "minLng,minLat,maxLng,maxLat");
+                details.put("example", "28.1,-29.6,28.3,-29.4");
+                return errorResponse(400, "INVALID_BOUNDS",
+                    "Bounds must have 4 comma-separated values: minLng,minLat,maxLng,maxLat",
+                    details, requestId, startTime);
+            }
+
+            double minLng, minLat, maxLng, maxLat;
+            try {
+                minLng = Double.parseDouble(boundsParts[0].trim());
+                minLat = Double.parseDouble(boundsParts[1].trim());
+                maxLng = Double.parseDouble(boundsParts[2].trim());
+                maxLat = Double.parseDouble(boundsParts[3].trim());
+            } catch (NumberFormatException e) {
+                JSONObject details = new JSONObject();
+                details.put("format", "minLng,minLat,maxLng,maxLat");
+                details.put("example", "28.1,-29.6,28.3,-29.4");
+                return errorResponse(400, "INVALID_BOUNDS",
+                    "Bounds values must be valid numbers",
+                    details, requestId, startTime);
+            }
+
+            // Validate coordinate ranges (WGS84)
+            if (minLng < -180 || minLng > 180 || maxLng < -180 || maxLng > 180) {
+                return errorResponse(400, "INVALID_BOUNDS",
+                    "Longitude must be between -180 and 180", requestId, startTime);
+            }
+            if (minLat < -90 || minLat > 90 || maxLat < -90 || maxLat > 90) {
+                return errorResponse(400, "INVALID_BOUNDS",
+                    "Latitude must be between -90 and 90", requestId, startTime);
+            }
+
+            // Parse returnFields
+            List<String> returnFieldsList = null;
+            if (returnFields != null && !returnFields.isEmpty()) {
+                String[] fields = returnFields.split(",");
+                returnFieldsList = new ArrayList<>();
+                for (String field : fields) {
+                    String trimmed = field.trim();
+                    if (!trimmed.isEmpty()) {
+                        returnFieldsList.add(trimmed);
+                    }
+                }
+            }
+
+            // Call service
+            NearbyParcelsResult result = getNearbyParcelsService().getParcelsInBounds(
+                formId,
+                geometryFieldId,
+                minLng, minLat, maxLng, maxLat,
+                excludeRecordId,
+                filterCondition,
+                returnFieldsList,
+                maxResults
+            );
+
+            // Build response
+            JSONObject response = new JSONObject();
+            response.put("success", true);
+
+            JSONObject data = new JSONObject();
+
+            // Build parcels array
+            JSONArray parcelsArray = new JSONArray();
+            for (NearbyParcel parcel : result.getParcels()) {
+                JSONObject parcelJson = new JSONObject();
+                parcelJson.put("recordId", parcel.getRecordId());
+
+                // Parse geometry JSON string to JSONObject
+                try {
+                    parcelJson.put("geometry", new JSONObject(parcel.getGeometry()));
+                } catch (Exception e) {
+                    parcelJson.put("geometry", parcel.getGeometry());
+                }
+
+                // Centroid as GeoJSON Point
+                JSONObject centroid = new JSONObject();
+                centroid.put("type", "Point");
+                JSONArray centroidCoords = new JSONArray();
+                centroidCoords.put(round(parcel.getCentroidLongitude(), 6));
+                centroidCoords.put(round(parcel.getCentroidLatitude(), 6));
+                centroid.put("coordinates", centroidCoords);
+                parcelJson.put("centroid", centroid);
+
+                parcelJson.put("areaHectares", round(parcel.getAreaHectares(), 2));
+
+                // Add record data if present
+                if (parcel.getRecordData() != null && !parcel.getRecordData().isEmpty()) {
+                    JSONObject recordData = new JSONObject();
+                    for (Map.Entry<String, String> entry : parcel.getRecordData().entrySet()) {
+                        recordData.put(entry.getKey(), entry.getValue());
+                    }
+                    parcelJson.put("recordData", recordData);
+                }
+
+                parcelsArray.put(parcelJson);
+            }
+            data.put("parcels", parcelsArray);
+
+            data.put("totalCount", result.getTotalCount());
+
+            // Bounds object
+            JSONObject boundsJson = new JSONObject();
+            boundsJson.put("minLongitude", result.getMinLongitude());
+            boundsJson.put("minLatitude", result.getMinLatitude());
+            boundsJson.put("maxLongitude", result.getMaxLongitude());
+            boundsJson.put("maxLatitude", result.getMaxLatitude());
+            data.put("bounds", boundsJson);
+
+            data.put("truncated", result.isTruncated());
+
+            response.put("data", data);
+            response.put("meta", buildMeta(requestId, startTime));
+
+            LogUtil.info(CLASS_NAME, "NearbyParcels [" + requestId + "] returned " +
+                result.getParcels().size() + " parcels (total: " + result.getTotalCount() + ")");
+
+            return new ApiResponse(200, response.toString());
+
+        } catch (Exception e) {
+            LogUtil.error(CLASS_NAME, e, "Error in getNearbyParcels [" + requestId + "]");
+            return errorResponse(500, "SERVER_ERROR",
+                "Internal server error: " + e.getMessage(), requestId, startTime);
+        }
+    }
+
+    // ==========================================================================
     // HEALTH CHECK ENDPOINT
     // ==========================================================================
 
@@ -1099,6 +1305,7 @@ public class GisApiProvider extends ApiPluginAbstract implements PropertyEditabl
         capabilities.put("batchCalculate", true);
         capabilities.put("geocode", true);
         capabilities.put("reverseGeocode", true);
+        capabilities.put("nearbyParcels", true);
         data.put("capabilities", capabilities);
 
         data.put("geometryEngine", "JTS 1.19.0");
