@@ -34,6 +34,20 @@ curl http://localhost:8084/jw/api/gis/gis/health
 curl -X POST http://localhost:8084/jw/api/gis/gis/calculate \
   -H "Content-Type: application/json" \
   -d '{"geometry":{"type":"Polygon","coordinates":[[[28.1,-29.3],[28.2,-29.3],[28.2,-29.4],[28.1,-29.4],[28.1,-29.3]]]}}'
+
+# Batch calculate (max 100 geometries)
+curl -X POST http://localhost:8084/jw/api/gis/gis/batchCalculate \
+  -H "Content-Type: application/json" \
+  -d '{"geometries":[{"id":"p1","geometry":{"type":"Polygon","coordinates":[[[28.1,-29.3],[28.2,-29.3],[28.2,-29.4],[28.1,-29.4],[28.1,-29.3]]]}}]}'
+
+# Geocode (forward)
+curl "http://localhost:8084/jw/api/gis/gis/geocode?query=Maseru"
+
+# Reverse geocode
+curl "http://localhost:8084/jw/api/gis/gis/reverseGeocode?lon=27.48&lat=-29.31"
+
+# Nearby parcels
+curl "http://localhost:8084/jw/api/gis/gis/nearbyParcels?formId=parcel&geometryFieldId=c_geometry&bounds=28.1,-29.6,28.3,-29.4"
 ```
 
 ## Architecture
@@ -47,7 +61,10 @@ This is a **Joget DX8 API Builder plugin** providing REST endpoints for GIS geom
   - `POST /gis/validate` - Rule-based geometry validation
   - `POST /gis/simplify` - Douglas-Peucker vertex reduction
   - `POST /gis/checkOverlap` - Database overlap detection
-  - `POST /gis/batchCalculate` - Multi-geometry processing
+  - `POST /gis/batchCalculate` - Multi-geometry processing (max 100 geometries)
+  - `GET /gis/nearbyParcels` - Get parcels within bounding box for display
+  - `GET /gis/geocode` - Forward geocoding via Nominatim
+  - `GET /gis/reverseGeocode` - Reverse geocoding via Nominatim
   - `GET /gis/health` - Health check
 
 - **GeometryEngine** (`engine/GeometryEngine.java`) - JTS-based geometry operations:
@@ -57,6 +74,12 @@ This is a **Joget DX8 API Builder plugin** providing REST endpoints for GIS geom
   - Uses Earth radius 6,371,000m for geodesic calculations
 
 - **OverlapService** (`service/OverlapService.java`) - Queries Joget form data for spatial overlap detection
+
+- **NearbyParcelsService** (`service/NearbyParcelsService.java`) - Returns parcels within bounding box for map display
+
+- **GeocodingService** (`service/GeocodingService.java`) - Forward/reverse geocoding via Nominatim API
+
+- **InputValidator** (`util/InputValidator.java`) - Request validation (size limits, coordinate range, SQL injection prevention)
 
 ### Response Envelope
 
@@ -102,11 +125,12 @@ The `/health` endpoint includes capabilities:
       "simplify": true,
       "checkOverlap": true,
       "batchCalculate": true,
-      "geocode": false,
-      "reverseGeocode": false
+      "geocode": true,
+      "reverseGeocode": true,
+      "nearbyParcels": true
     },
     "geometryEngine": "JTS 1.19.0",
-    "geocodingProvider": "none",
+    "geocodingProvider": "Nominatim",
     "supportedGeometryTypes": ["Polygon", "MultiPolygon"]
   }
 }
@@ -115,9 +139,10 @@ The `/health` endpoint includes capabilities:
 ### Key Design Patterns
 
 1. **OSGi Bundle** - JTS Topology Suite 1.19.0 is embedded (`Embed-Dependency`) to avoid classpath conflicts
-2. **Lazy Initialization** - GeometryEngine and OverlapService are lazily created
+2. **Thread-Safe Lazy Initialization** - Services use double-checked locking with volatile fields
 3. **WGS84 Coordinates** - All coordinates use EPSG:4326 (longitude, latitude order per GeoJSON spec)
 4. **Geodesic Calculations** - Area uses spherical excess formula; perimeter uses Haversine distance
+5. **Input Validation** - Batch size limit (100), filter condition SQL injection prevention, coordinate range validation
 
 ## Related Projects
 

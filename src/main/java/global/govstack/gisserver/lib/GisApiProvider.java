@@ -53,12 +53,13 @@ import java.util.UUID;
 public class GisApiProvider extends ApiPluginAbstract implements PropertyEditable {
 
     private static final String CLASS_NAME = "global.govstack.gisserver.lib.GisApiProvider";
-    
-    // Services (lazy initialized)
-    private GeometryEngine geometryEngine;
-    private OverlapService overlapService;
-    private GeocodingService geocodingService;
-    private NearbyParcelsService nearbyParcelsService;
+    private static final int MAX_BATCH_SIZE = 100;
+
+    // Services (lazy initialized with volatile for thread safety)
+    private volatile GeometryEngine geometryEngine;
+    private volatile OverlapService overlapService;
+    private volatile GeocodingService geocodingService;
+    private volatile NearbyParcelsService nearbyParcelsService;
 
     @Override
     public String getName() {
@@ -107,43 +108,67 @@ public class GisApiProvider extends ApiPluginAbstract implements PropertyEditabl
     }
 
     /**
-     * Get geometry engine (lazy initialization).
+     * Get geometry engine (lazy initialization with double-checked locking).
      */
     private GeometryEngine getGeometryEngine() {
-        if (geometryEngine == null) {
-            geometryEngine = new GeometryEngine();
+        GeometryEngine local = geometryEngine;
+        if (local == null) {
+            synchronized (this) {
+                local = geometryEngine;
+                if (local == null) {
+                    geometryEngine = local = new GeometryEngine();
+                }
+            }
         }
-        return geometryEngine;
+        return local;
     }
 
     /**
-     * Get overlap service (lazy initialization).
+     * Get overlap service (lazy initialization with double-checked locking).
      */
     private OverlapService getOverlapService() {
-        if (overlapService == null) {
-            overlapService = new OverlapService();
+        OverlapService local = overlapService;
+        if (local == null) {
+            synchronized (this) {
+                local = overlapService;
+                if (local == null) {
+                    overlapService = local = new OverlapService();
+                }
+            }
         }
-        return overlapService;
+        return local;
     }
 
     /**
-     * Get geocoding service (lazy initialization).
+     * Get geocoding service (lazy initialization with double-checked locking).
      */
     private GeocodingService getGeocodingService() {
-        if (geocodingService == null) {
-            geocodingService = new GeocodingService();
+        GeocodingService local = geocodingService;
+        if (local == null) {
+            synchronized (this) {
+                local = geocodingService;
+                if (local == null) {
+                    geocodingService = local = new GeocodingService();
+                }
+            }
         }
-        return geocodingService;
+        return local;
     }
 
     /**
-     * Get nearby parcels service (lazy initialization).
+     * Get nearby parcels service (lazy initialization with double-checked locking).
      */
     private NearbyParcelsService getNearbyParcelsService() {
-        if (nearbyParcelsService == null) {
-            nearbyParcelsService = new NearbyParcelsService();
+        NearbyParcelsService local = nearbyParcelsService;
+        if (local == null) {
+            synchronized (this) {
+                local = nearbyParcelsService;
+                if (local == null) {
+                    nearbyParcelsService = local = new NearbyParcelsService();
+                }
+            }
         }
-        return nearbyParcelsService;
+        return local;
     }
 
     // ==========================================================================
@@ -275,8 +300,7 @@ public class GisApiProvider extends ApiPluginAbstract implements PropertyEditabl
             return new ApiResponse(200, response.toString());
 
         } catch (Exception e) {
-            LogUtil.error(CLASS_NAME, e, "Error in calculate");
-            return errorResponse(500, "SERVER_ERROR", e.getMessage(), requestId, startTime);
+            return serverErrorResponse(e, "calculate", requestId, startTime);
         }
     }
 
@@ -418,8 +442,7 @@ public class GisApiProvider extends ApiPluginAbstract implements PropertyEditabl
             return new ApiResponse(200, response.toString());
 
         } catch (Exception e) {
-            LogUtil.error(CLASS_NAME, e, "Error in validate");
-            return errorResponse(500, "SERVER_ERROR", e.getMessage(), requestId, startTime);
+            return serverErrorResponse(e, "validate", requestId, startTime);
         }
     }
 
@@ -595,8 +618,7 @@ public class GisApiProvider extends ApiPluginAbstract implements PropertyEditabl
             return new ApiResponse(200, response.toString());
 
         } catch (Exception e) {
-            LogUtil.error(CLASS_NAME, e, "Error in simplify");
-            return errorResponse(500, "SERVER_ERROR", e.getMessage(), requestId, startTime);
+            return serverErrorResponse(e, "simplify", requestId, startTime);
         }
     }
 
@@ -823,8 +845,7 @@ public class GisApiProvider extends ApiPluginAbstract implements PropertyEditabl
             return new ApiResponse(200, response.toString());
 
         } catch (Exception e) {
-            LogUtil.error(CLASS_NAME, e, "Error in checkOverlap");
-            return errorResponse(500, "SERVER_ERROR", e.getMessage(), requestId, startTime);
+            return serverErrorResponse(e, "checkOverlap", requestId, startTime);
         }
     }
 
@@ -935,8 +956,7 @@ public class GisApiProvider extends ApiPluginAbstract implements PropertyEditabl
             return new ApiResponse(200, response.toString());
 
         } catch (Exception e) {
-            LogUtil.error(CLASS_NAME, e, "Error in geocode");
-            return errorResponse(500, "SERVER_ERROR", e.getMessage(), requestId, startTime);
+            return serverErrorResponse(e, "geocode", requestId, startTime);
         }
     }
 
@@ -1071,8 +1091,7 @@ public class GisApiProvider extends ApiPluginAbstract implements PropertyEditabl
             return new ApiResponse(200, response.toString());
 
         } catch (Exception e) {
-            LogUtil.error(CLASS_NAME, e, "Error in reverseGeocode");
-            return errorResponse(500, "SERVER_ERROR", e.getMessage(), requestId, startTime);
+            return serverErrorResponse(e, "reverseGeocode", requestId, startTime);
         }
     }
 
@@ -1261,9 +1280,7 @@ public class GisApiProvider extends ApiPluginAbstract implements PropertyEditabl
             return new ApiResponse(200, response.toString());
 
         } catch (Exception e) {
-            LogUtil.error(CLASS_NAME, e, "Error in getNearbyParcels [" + requestId + "]");
-            return errorResponse(500, "SERVER_ERROR",
-                "Internal server error: " + e.getMessage(), requestId, startTime);
+            return serverErrorResponse(e, "getNearbyParcels", requestId, startTime);
         }
     }
 
@@ -1371,7 +1388,18 @@ public class GisApiProvider extends ApiPluginAbstract implements PropertyEditabl
                 return errorResponse(400, "MISSING_GEOMETRIES",
                     "Array of geometries is required", requestId, startTime);
             }
-            
+
+            // Validate batch size to prevent OOM attacks
+            if (geometries.length() > MAX_BATCH_SIZE) {
+                JSONObject details = new JSONObject();
+                details.put("requestedSize", geometries.length());
+                details.put("maxAllowed", MAX_BATCH_SIZE);
+                return errorResponse(400, "BATCH_TOO_LARGE",
+                    String.format("Batch size (%d) exceeds maximum allowed (%d)",
+                        geometries.length(), MAX_BATCH_SIZE),
+                    details, requestId, startTime);
+            }
+
             boolean continueOnError = request.optBoolean("continueOnError", true);
             
             JSONArray results = new JSONArray();
@@ -1447,8 +1475,7 @@ public class GisApiProvider extends ApiPluginAbstract implements PropertyEditabl
             return new ApiResponse(200, response.toString());
 
         } catch (Exception e) {
-            LogUtil.error(CLASS_NAME, e, "Error in batchCalculate");
-            return errorResponse(500, "SERVER_ERROR", e.getMessage(), requestId, startTime);
+            return serverErrorResponse(e, "batchCalculate", requestId, startTime);
         }
     }
 
@@ -1547,6 +1574,20 @@ public class GisApiProvider extends ApiPluginAbstract implements PropertyEditabl
                                        String requestId, long startTime) {
         return errorResponse(statusCode, validationResult.getErrorCode(),
             validationResult.getMessage(), validationResult.toDetailsJson(), requestId, startTime);
+    }
+
+    /**
+     * Build sanitized server error response (hides internal details).
+     * Logs the full exception but returns generic message to client.
+     */
+    private ApiResponse serverErrorResponse(Exception e, String operation,
+                                             String requestId, long startTime) {
+        LogUtil.error(CLASS_NAME, e, "Error in " + operation + " [" + requestId + "]");
+        String safeMessage = "An internal error occurred. Please try again or contact support.";
+        JSONObject details = new JSONObject();
+        details.put("requestId", requestId);
+        details.put("operation", operation);
+        return errorResponse(500, "SERVER_ERROR", safeMessage, details, requestId, startTime);
     }
 
     /**

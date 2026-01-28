@@ -280,21 +280,39 @@ public class GeometryEngine {
     
     /**
      * Count vertices in geometry.
+     * For polygons, excludes the duplicate closing point of each ring.
      */
     public int getVertexCount(Geometry geometry) {
         if (geometry == null || geometry.isEmpty()) {
             return 0;
         }
-        
-        int count = geometry.getNumPoints();
-        
-        // For closed polygons, don't count the duplicate closing point
+
         if (geometry instanceof Polygon) {
-            count -= 1;
+            return countPolygonVertices((Polygon) geometry);
         } else if (geometry instanceof MultiPolygon) {
-            count -= geometry.getNumGeometries();
+            int total = 0;
+            for (int i = 0; i < geometry.getNumGeometries(); i++) {
+                total += countPolygonVertices((Polygon) geometry.getGeometryN(i));
+            }
+            return total;
         }
-        
+
+        return geometry.getNumPoints();
+    }
+
+    /**
+     * Count vertices in a polygon, properly handling interior rings (holes).
+     * Each ring has a duplicate closing point which is excluded from the count.
+     */
+    private int countPolygonVertices(Polygon polygon) {
+        // Exterior ring: subtract 1 for closing point
+        int count = polygon.getExteriorRing().getNumPoints() - 1;
+
+        // Interior rings (holes): subtract 1 for each closing point
+        for (int i = 0; i < polygon.getNumInteriorRing(); i++) {
+            count += polygon.getInteriorRingN(i).getNumPoints() - 1;
+        }
+
         return Math.max(0, count);
     }
     

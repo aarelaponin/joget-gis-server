@@ -7,6 +7,7 @@ import org.locationtech.jts.geom.Geometry;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Pattern;
 
 /**
  * Input validation utilities for GIS API.
@@ -346,5 +347,73 @@ public class InputValidator {
             }
         }
         return count;
+    }
+
+    // ==========================================================================
+    // FILTER CONDITION VALIDATION (SQL Injection Prevention)
+    // ==========================================================================
+
+    // Pattern allowing only safe characters for SQL filter conditions
+    private static final Pattern SAFE_FILTER_PATTERN = Pattern.compile(
+        "^[\\w\\s=<>!?.,()'\"-]+$", Pattern.CASE_INSENSITIVE);
+
+    // SQL keywords that should never appear in filter conditions
+    private static final String[] BLOCKED_SQL_PATTERNS = {
+        "DROP", "DELETE", "INSERT", "UPDATE", "TRUNCATE", "ALTER",
+        "CREATE", "EXEC", "EXECUTE", "UNION", "INTO", "--", "/*", "*/"
+    };
+
+    private static final int MAX_FILTER_LENGTH = 500;
+
+    /**
+     * Validate a filter condition string to prevent SQL injection.
+     *
+     * @param filterCondition The filter condition to validate
+     * @return ValidationResult
+     */
+    public static ValidationResult validateFilterCondition(String filterCondition) {
+        if (filterCondition == null || filterCondition.trim().isEmpty()) {
+            return ValidationResult.success();
+        }
+
+        String trimmed = filterCondition.trim();
+
+        // Check length
+        if (trimmed.length() > MAX_FILTER_LENGTH) {
+            return ValidationResult.error(
+                "FILTER_TOO_LONG",
+                String.format("Filter condition exceeds %d characters", MAX_FILTER_LENGTH),
+                "filterCondition",
+                "Length: " + trimmed.length(),
+                "Simplify the filter condition"
+            );
+        }
+
+        // Check for invalid characters
+        if (!SAFE_FILTER_PATTERN.matcher(trimmed).matches()) {
+            return ValidationResult.error(
+                "INVALID_FILTER",
+                "Filter condition contains invalid characters",
+                "filterCondition",
+                "Only alphanumeric characters and basic SQL operators are allowed",
+                "Remove special characters from the filter"
+            );
+        }
+
+        // Check for blocked SQL keywords
+        String upper = trimmed.toUpperCase();
+        for (String blocked : BLOCKED_SQL_PATTERNS) {
+            if (upper.contains(blocked)) {
+                return ValidationResult.error(
+                    "INVALID_FILTER",
+                    "Filter contains disallowed SQL keyword: " + blocked,
+                    "filterCondition",
+                    "Dangerous SQL pattern detected",
+                    "Remove SQL DDL/DML keywords from the filter"
+                );
+            }
+        }
+
+        return ValidationResult.success();
     }
 }

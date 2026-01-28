@@ -3,6 +3,7 @@ package global.govstack.gisserver.service;
 import global.govstack.gisserver.engine.GeometryEngine;
 import global.govstack.gisserver.model.NearbyParcel;
 import global.govstack.gisserver.model.NearbyParcelsResult;
+import global.govstack.gisserver.util.InputValidator;
 import org.joget.apps.form.dao.FormDataDao;
 import org.joget.apps.app.service.AppUtil;
 import org.joget.apps.form.model.FormRow;
@@ -78,6 +79,17 @@ public class NearbyParcelsService {
             // Create bounding box for spatial filter
             Envelope queryEnvelope = new Envelope(minLng, maxLng, minLat, maxLat);
 
+            // Validate filterCondition to prevent SQL injection
+            String safeFilterCondition = filterCondition;
+            if (filterCondition != null && !filterCondition.isEmpty()) {
+                InputValidator.ValidationResult filterResult =
+                    InputValidator.validateFilterCondition(filterCondition);
+                if (!filterResult.isValid()) {
+                    LogUtil.warn(CLASS_NAME, "Invalid filter rejected: " + filterResult.getMessage());
+                    safeFilterCondition = null;  // Ignore invalid filter
+                }
+            }
+
             // Get FormDataDao
             FormDataDao formDataDao = (FormDataDao) AppUtil.getApplicationContext()
                 .getBean("formDataDao");
@@ -91,13 +103,13 @@ public class NearbyParcelsService {
                 paramsList.add(excludeRecordId);
             }
 
-            if (filterCondition != null && !filterCondition.isEmpty()) {
+            if (safeFilterCondition != null && !safeFilterCondition.isEmpty()) {
                 if (conditionBuilder.length() == 0) {
                     conditionBuilder.append("WHERE ");
                 } else {
                     conditionBuilder.append(" AND ");
                 }
-                conditionBuilder.append(filterCondition);
+                conditionBuilder.append(safeFilterCondition);
             }
 
             String condition = conditionBuilder.toString();
